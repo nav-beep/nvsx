@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ==============================================================================
-# preflight hook for gpu-off-bus-recover
+# preflight hook for gpu-off-bus
 # ==============================================================================
 # Runs AFTER engine-level prereqs pass. Use this for:
 #   - Configuring alert channels (Slack webhook, PagerDuty, etc.)

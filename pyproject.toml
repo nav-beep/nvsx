@@ -1,7 +1,7 @@
 [project]
 name = "nvsx"
-version = "0.1.0"
-description = "NVSentinel eXtensions — cinematic runbooks for GPU cluster fault remediation"
+version = "0.2.0"
+description = "NVSentinel operator control plane — setup, runbooks, and webhook-triggered auto-remediation"
 readme = "README.md"
 requires-python = ">=3.11"
 license = "MIT"
@@ -34,8 +34,8 @@ convert = ["anthropic>=0.40"]
 nvsx = "nvsx.cli:main"
 
 [project.urls]
-Homepage = "https://github.com/clockwork-io/nvsx"
-Issues = "https://github.com/clockwork-io/nvsx/issues"
+Homepage = "https://github.com/nav-beep/nvsx"
+Issues = "https://github.com/nav-beep/nvsx/issues"
 
 [build-system]
 requires = ["hatchling"]
@@ -48,10 +48,8 @@ packages = ["src/nvsx"]
 include = [
   "src/",
   "runbooks/",
-  "shims/",
   "scripts/",
   "examples/",
-  "demo/",
   "nvsx",
   "LICENSE",
   "README.md",

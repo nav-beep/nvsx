@@ -130,7 +130,8 @@ class Runner:
         env["NVSX_STAGE"] = stage.id
         env["NVSX_RUNBOOK"] = self.runbook.metadata.name
         env["NVSX_ELAPSED_MS"] = str(int(elapsed_s * 1000))
-        env["NVSX_PLAYGROUND"] = str(self.playground)
+        env["NVSX_PROJECT_ROOT"] = str(self.playground)
+        env["NVSX_PLAYGROUND"] = str(self.playground)  # legacy alias
         if self.target_node:
             env["NVSX_TARGET_NODE"] = self.target_node
         return env

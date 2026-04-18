@@ -3,10 +3,13 @@ kind: Runbook
 metadata:
   name: thermal-throttle
   nickname: sleepy-panda
-  title: "Thermal throttling detection (stub)"
-  summary: "GpuThermalWatch flips → PreferNoSchedule taint → drain at end of shift. Gentle runbook pattern."
-  tags: [infra, thermal, stub, beta]
+  title: "Thermal throttling detection"
+  summary: "GpuThermalWatch flips → PreferNoSchedule taint → drain at end of shift."
+  tags: [infra, thermal, stub]
   estimatedDuration: 60s
+
+# Stub runbook: demonstrates the gentle-response pattern for thermal events.
+# Add your own hook scripts + any extra watch clauses specific to your cluster.
 
 prerequisites:
   - name: nvsentinel-control-plane
@@ -18,45 +21,37 @@ stages:
     title: "Pre-flight"
     timeout: 15s
 
-  - id: baseline
-    title: "Baseline thermal readings"
-    timeout: 10s
-    dwell: 3s
-
-  - id: inject
-    title: "Simulate thermal violation"
-    # TODO: add shims/simulate-thermal.sh (DCGM field for thermal)
-    timeout: 10s
-
   - id: detect
     title: "GpuThermalWatch flips"
     watch:
       - kind: node-condition
         type: GpuThermalWatch
         status: "True"
-    timeout: 30s
+    timeout: 60s
 
   - id: quarantine
-    title: "PreferNoSchedule taint"
+    title: "PreferNoSchedule taint applied"
     watch:
       - kind: taint
         key: "nvidia.com/gpu-error"
-    timeout: 15s
+    timeout: 60s
 
   - id: recover
     title: "Cool-off + uncordon"
-    timeout: 30s
+    watch:
+      - kind: node-condition
+        type: GpuThermalWatch
+        status: "False"
+    timeout: 600s
     dwell: 4s
 
   - id: postmortem
     title: "Collect artifacts"
-    timeout: 30s
+    timeout: 60s
 
 narration:
-  preflight:   "Pre-flight for thermal stub."
-  baseline:    "GPUs running normal temperatures."
-  inject:      "Simulating thermal violation..."
-  detect:      "NVSentinel: GpuThermalWatch=True."
+  preflight:   "Pre-flight thermal runbook."
+  detect:      "NVSentinel: GpuThermalWatch=True in {{elapsed}}."
   quarantine:  "Taint applied — existing work finishes, no new pods land."
-  recover:     "Cooled off; node uncordoned."
+  recover:     "Cooled off; node back in schedulable pool."
   postmortem:  "Thermal timeline captured."

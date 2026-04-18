@@ -31,35 +31,20 @@ stages:
     hook: hooks/{name}/preflight.sh
     timeout: 15s
 
-  - id: baseline
-    title: "Workload is healthy"
-    # TODO: describe what healthy looks like for your use case.
-    timeout: 15s
-    dwell: 3s
-
-  - id: inject
-    title: "Inject fault"
-    # TODO: replace with your fault-injector. Should be idempotent and target a
-    # specific node via $NVSX_TARGET_NODE.
-    # action:
-    #   script: shims/simulate-gpu-off-bus.sh
-    #   args: ["$NVSX_TARGET_NODE"]
-    timeout: 30s
-    dwell: 2s
-
   - id: detect
     title: "NVSentinel detects"
     watch:
-      # TODO: pick the right condition. Common options:
-      #   GpuPcieWatch  — PCIe/XID 79
-      #   GpuInforomWatch — InfoROM corruption
-      #   GpuMemWatch — ECC memory errors
-      #   GpuThermalWatch — thermal throttling
-      #   GpuNvlinkWatch — NVLink down
+      # TODO: pick the right condition for your fault. Common options:
+      #   GpuPcieWatch     — PCIe / XID 79 (GPU fell off bus)
+      #   GpuInforomWatch  — InfoROM corruption
+      #   GpuMemWatch      — ECC memory errors
+      #   GpuThermalWatch  — thermal throttling
+      #   GpuNvlinkWatch   — NVLink down
+      #   GpuDriverWatch   — driver timeout / hang
       - kind: node-condition
         type: GpuPcieWatch
         status: "True"
-    timeout: 30s
+    timeout: 60s
 
   - id: quarantine
     title: "Fault-quarantine cordons node"
@@ -110,13 +95,11 @@ stages:
 
 narration:
   preflight:  "Checking prerequisites..."
-  baseline:   "Workload running on {{{{targetNode}}}}."
-  inject:     "Simulating fault..."
   detect:     "NVSentinel detected the fault in {{{{elapsed}}}}."
   quarantine: "Node cordoned."
   drain:      "Workload evicted."
   remediate:  "Remediation CRD created."
-  recover:    "Recovered. No human touched this."
+  recover:    "Recovered. No human intervention needed."
   postmortem: "Artifacts at {{{{artifactDir}}}}."
 """
 

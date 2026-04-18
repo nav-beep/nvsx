@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ==============================================================================
-# on-remediate hook for gpu-off-bus-recover
+# on-remediate hook for gpu-off-bus
 # ==============================================================================
 # Fires when the `remediate` stage confirms the RebootNode CRD exists.
 # In production, this is where you'd:

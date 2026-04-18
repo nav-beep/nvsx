@@ -42,10 +42,10 @@ class ConversionOutput(BaseModel):
     runbook_yaml: str = Field(
         description=(
             "The full nvsx/v1 Runbook YAML. Must start with 'apiVersion: nvsx/v1'. "
-            "Must include all required stages (preflight, baseline, inject, "
-            "detect, quarantine, drain, remediate, recover, postmortem). "
-            "Stages that have no watch/action should still be listed "
-            "(with a TODO comment in title)."
+            "Must include stages in canonical order: preflight, detect, "
+            "quarantine, drain, remediate, recover, postmortem. Only include "
+            "optional stages (baseline, inject) if the original runbook explicitly "
+            "describes a pre-check or a drill-mode fault injection."
         ),
     )
     preflight_sh: str = Field(
@@ -109,30 +109,30 @@ Bucket B — "Operational" wrapping. KEEP these verbatim in hook scripts:
 The split rule: if it's a *K8s API call that changes cluster state* (cordon/drain/reboot/uncordon), delete — NVSentinel does it. If it's a *side-effect to an external system*, keep → move to the appropriate hook.
 
 **Hook timing:**
-- `preflight.sh` runs before the fault is injected. Use for setup: opening port-forwards, warming alert channels, sending "starting drill" messages.
+- `preflight.sh` runs when the runbook starts — either manually by an operator, or auto-triggered by the nvsx webhook/poll daemon on an NVSentinel event. Use for setup: opening port-forwards, warming alert channels, sending "incident acknowledged" messages.
 - `on-remediate.sh` fires when NVSentinel's RebootNode CRD appears. Use for: paging oncall, posting to #gpu-alerts, creating incident tickets.
 - `on-recover.sh` fires after the node is healthy again. Use for: closing incidents, posting recovery, recording MTTR.
 
-**Hook env vars available:** `NVSX_STAGE`, `NVSX_RUNBOOK`, `NVSX_TARGET_NODE`, `NVSX_ELAPSED_MS`, `NVSX_PLAYGROUND`, `NVSX_REPORT_FILE`.
+**Hook env vars available:** `NVSX_STAGE`, `NVSX_RUNBOOK`, `NVSX_TARGET_NODE`, `NVSX_ELAPSED_MS`, `NVSX_PROJECT_ROOT`, `NVSX_REPORT_FILE`.
 
-**YAML schema (nvsx/v1):** Always use all 9 canonical stages: `preflight`, `baseline`, `inject`, `detect`, `quarantine`, `drain`, `remediate`, `recover`, `postmortem`. Use watch kinds: `pod`, `node`, `node-condition`, `crd`, `pod-event`, `taint`, `log`, `mongo-event`. Always include a `nickname` in metadata (adj-animal style, e.g. "rogue-moose").
+**YAML schema (nvsx/v1):** Canonical stages in order: `preflight`, `detect`, `quarantine`, `drain`, `remediate`, `recover`, `postmortem`. Optional: `baseline` (observation of pre-fault healthy state) and `inject` (drill-mode fault injection — only include if the source runbook explicitly describes injecting a test fault; real production runbooks never have this). Watch kinds: `pod`, `node`, `node-condition`, `crd`, `pod-event`, `taint`, `log`, `mongo-event`. Always include a `nickname` in metadata (adj-animal style, e.g. "rogue-moose").
 
 Keep narration lines short and operator-friendly. Preserve the original runbook's *intent* — if it mentioned paging on-call, the hook should do that (with a TODO for the specific webhook/service).
 """
 
 
 _FLAGSHIP_EXAMPLE = """\
---- FLAGSHIP RUNBOOK EXAMPLE (gpu-off-bus-recover.yaml) ---
+--- FLAGSHIP RUNBOOK EXAMPLE (gpu-off-bus.yaml) ---
 
 apiVersion: nvsx/v1
 kind: Runbook
 metadata:
-  name: gpu-off-bus-recover
+  name: gpu-off-bus
   nickname: rogue-moose
   title: "GPU fell off bus → self-heal"
   summary: "XID 79 → NVSentinel quarantine → RebootNode CRD → node recovered. No human in the loop."
-  tags: [infra, nvsentinel, xid, remediation, demo]
-  estimatedDuration: 75s
+  tags: [infra, nvsentinel, xid, remediation]
+  estimatedDuration: 90s
 
 prerequisites:
   - name: nvsentinel-control-plane
@@ -142,26 +142,8 @@ prerequisites:
 stages:
   - id: preflight
     title: "Pre-flight checks"
-    hook: hooks/gpu-off-bus-recover/preflight.sh
+    hook: hooks/gpu-off-bus/preflight.sh
     timeout: 20s
-
-  - id: baseline
-    title: "Workload is healthy"
-    watch:
-      - kind: pod
-        namespace: default
-        selector: "app=nvsx-sentinel-workload"
-        expect: "phase=Running"
-    timeout: 15s
-    dwell: 4s
-
-  - id: inject
-    title: "Simulate XID 79"
-    action:
-      script: shims/simulate-gpu-off-bus.sh
-      args: ["$NVSX_TARGET_NODE"]
-    timeout: 30s
-    dwell: 2s
 
   - id: detect
     title: "NVSentinel detects fault"
@@ -169,7 +151,7 @@ stages:
       - kind: node-condition
         type: GpuPcieWatch
         status: "True"
-    timeout: 30s
+    timeout: 60s
 
   - id: quarantine
     title: "Fault-quarantine cordons node"
@@ -179,28 +161,27 @@ stages:
         expect: "true"
       - kind: taint
         key: "nvidia.com/gpu-error"
-    timeout: 30s
+    timeout: 60s
 
   - id: drain
-    title: "Node-drainer evicts workload"
+    title: "Node-drainer evicts workloads"
     watch:
       - kind: pod-event
-        namespace: default
         reason: "Evicted"
-    timeout: 45s
+    timeout: 120s
 
   - id: remediate
-    title: "RebootNode CRD created ◆"
+    title: "RebootNode CRD created"
     watch:
       - kind: crd
         group: janitor.dgxc.nvidia.com
         resource: rebootnodes
-    hook: hooks/gpu-off-bus-recover/on-remediate.sh
-    timeout: 30s
+    hook: hooks/gpu-off-bus/on-remediate.sh
+    timeout: 60s
     dwell: 5s
 
   - id: recover
-    title: "Node rejoins, workload reschedules"
+    title: "Node rejoins, workloads reschedule"
     watch:
       - kind: node-condition
         type: GpuPcieWatch
@@ -208,8 +189,8 @@ stages:
       - kind: node
         field: spec.unschedulable
         expect: "false"
-    hook: hooks/gpu-off-bus-recover/on-recover.sh
-    timeout: 90s
+    hook: hooks/gpu-off-bus/on-recover.sh
+    timeout: 600s
     dwell: 6s
 
   - id: postmortem
@@ -217,18 +198,16 @@ stages:
     action:
       script: scripts/collect-metrics.sh
       args: ["./nvsx-artifacts"]
-    timeout: 60s
+    timeout: 120s
 
 narration:
-  preflight:   "Checking NVSentinel control-plane, MongoDB, demo-janitor shim..."
-  baseline:    "A GPU workload is running on {{targetNode}}."
-  inject:      "Injecting XID 79 — the kernel just logged 'GPU has fallen off the bus'."
+  preflight:   "Checking NVSentinel control-plane + GPU health monitor + MongoDB..."
   detect:      "NVSentinel sees it. GpuPcieWatch flipped in {{elapsed}}."
-  quarantine:  "Fault-quarantine cordons the node, taints it. Nothing schedules here."
-  drain:       "Node-drainer evicts the workload."
+  quarantine:  "Fault-quarantine cordoned the node and applied the gpu-error taint."
+  drain:       "Node-drainer evicted workloads from the cordoned node."
   remediate:   "Fault-remediation created a RebootNode CRD. Janitor takes it from here."
-  recover:     "Condition cleared. Node back online. No human touched this."
-  postmortem:  "Wrote {{artifactCount}} files to {{artifactDir}}."
+  recover:     "Condition cleared. Node back online. Workloads rescheduling."
+  postmortem:  "Wrote {{artifactCount}} artifact files to {{artifactDir}}."
 
 --- END FLAGSHIP EXAMPLE ---
 """
@@ -269,7 +248,7 @@ def convert_runbook(
         raise SystemExit(2)
 
     # Lazy-install the SDK into our venv if missing
-    venv_python = playground / ".nvsx-venv" / "bin" / "python"
+    venv_python = playground / ".venv" / "bin" / "python"
     _ensure_anthropic_installed(venv_python)
 
     import anthropic
