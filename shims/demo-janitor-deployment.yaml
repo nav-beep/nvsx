@@ -1,0 +1,139 @@
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: nvsx-shims
+  labels:
+    nvsx.io/purpose: "demo-shim"
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: demo-janitor
+  namespace: nvsx-shims
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: nvsx-demo-janitor
+rules:
+  - apiGroups: [""]
+    resources: ["nodes"]
+    verbs: ["get", "list", "watch", "patch", "update"]
+  - apiGroups: [""]
+    resources: ["nodes/status"]
+    verbs: ["patch", "update"]
+  - apiGroups: ["janitor.dgxc.nvidia.com"]
+    resources: ["rebootnodes", "gpuresets", "terminatenodes"]
+    verbs: ["get", "list", "watch", "delete", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: nvsx-demo-janitor
+subjects:
+  - kind: ServiceAccount
+    name: demo-janitor
+    namespace: nvsx-shims
+roleRef:
+  kind: ClusterRole
+  name: nvsx-demo-janitor
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: demo-janitor-script
+  namespace: nvsx-shims
+data:
+  # Note: keep in sync with shims/demo-janitor.sh. The version below is
+  # adapted for in-cluster execution (no kubectl proxy; uses API server directly).
+  janitor.sh: |
+    #!/bin/sh
+    set -eu
+    SIMULATED_REBOOT_S="${DEMO_REBOOT_SECONDS:-12}"
+    POLL_S="${DEMO_POLL:-3}"
+    echo "demo-janitor starting (reboot=${SIMULATED_REBOOT_S}s)"
+
+    HANDLED_FILE=/tmp/handled.txt
+    : > "$HANDLED_FILE"
+
+    clear_conditions() {
+      node="$1"
+      ts="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+      for cond in GpuPcieWatch GpuDcgmConnectivityFailure GpuAllWatch; do
+        kubectl patch node "$node" --subresource=status --type=strategic \
+          -p "{\"status\":{\"conditions\":[{\"type\":\"$cond\",\"status\":\"False\",\"reason\":\"GpuHealthy\",\"message\":\"Simulated reboot complete (demo-janitor).\",\"lastHeartbeatTime\":\"$ts\",\"lastTransitionTime\":\"$ts\"}]}}" \
+          >/dev/null 2>&1 || true
+      done
+    }
+
+    while true; do
+      crds=$(kubectl get rebootnodes.janitor.dgxc.nvidia.com -A \
+        -o jsonpath='{range .items[*]}{.metadata.namespace}/{.metadata.name}|{.spec.nodeName}{"\n"}{end}' \
+        2>/dev/null || echo "")
+      echo "$crds" | while IFS='|' read -r ns_name node; do
+        [ -z "$ns_name" ] && continue
+        [ -z "$node" ] && continue
+        key="$ns_name|$node"
+        if grep -qxF "$key" "$HANDLED_FILE" 2>/dev/null; then continue; fi
+        echo "$key" >> "$HANDLED_FILE"
+        ns="${ns_name%%/*}"
+        name="${ns_name#*/}"
+        echo "handling $ns/$name (node=$node)"
+        (
+          sleep "$SIMULATED_REBOOT_S"
+          echo "simulated reboot complete for $node"
+          clear_conditions "$node"
+          kubectl taint node "$node" "nvidia.com/gpu-error-" 2>/dev/null || true
+          kubectl uncordon "$node" 2>/dev/null || true
+          kubectl delete "rebootnodes.janitor.dgxc.nvidia.com" -n "$ns" "$name" 2>/dev/null || true
+          echo "$node is back online"
+        ) &
+      done
+      sleep "$POLL_S"
+    done
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: demo-janitor
+  namespace: nvsx-shims
+  labels:
+    app: demo-janitor
+    nvsx.io/purpose: "demo-shim"
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: demo-janitor
+  template:
+    metadata:
+      labels:
+        app: demo-janitor
+    spec:
+      serviceAccountName: demo-janitor
+      containers:
+        - name: janitor
+          image: bitnami/kubectl:1.28
+          command: ["/bin/sh", "/script/janitor.sh"]
+          env:
+            - name: DEMO_REBOOT_SECONDS
+              value: "12"
+            - name: DEMO_POLL
+              value: "3"
+          volumeMounts:
+            - name: script
+              mountPath: /script
+          resources:
+            requests:
+              cpu: "10m"
+              memory: "32Mi"
+            limits:
+              cpu: "100m"
+              memory: "128Mi"
+      volumes:
+        - name: script
+          configMap:
+            name: demo-janitor-script
+            defaultMode: 0755

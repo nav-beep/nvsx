@@ -1,0 +1,35 @@
+# venv created by ./nvsx launcher on first run
+.venv/
+.nvsx-venv/
+
+# python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+*.egg
+build/
+dist/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# nvsx runtime artifacts
+nvsx-artifacts/
+nvsx-artifacts-*/
+nvsx-demo.cast
+*.cast
+~/.nvsx/
+
+# editor / os
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# secrets — don't commit API keys
+.env
+.env.local
+.envrc

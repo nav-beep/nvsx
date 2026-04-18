@@ -1,0 +1,112 @@
+apiVersion: nvsx/v1
+kind: Runbook
+metadata:
+  name: training-migrate
+  nickname: wandering-wolf
+  title: "Training job survives GPU fault"
+  summary: "InfoROM fault → NVSentinel cordons → TorchPass live-migrates DDP → zero step loss."
+  tags: [training, torchpass, ddp, demo, beta]
+  estimatedDuration: 90s
+
+prerequisites:
+  - name: nvsentinel-control-plane
+    check: "kubectl get pods -n nvsentinel -l app.kubernetes.io/name=fault-quarantine -o jsonpath='{.items[*].status.phase}'"
+    expect: "Running"
+  - name: torchpass
+    check: "kubectl get deploy -A -l app.kubernetes.io/name=torchpass -o name | wc -l | tr -d ' '"
+    expect: ">=1"
+  - name: training-job
+    check: "kubectl get pod fault-migrate-test-master-0 -n default -o jsonpath='{.status.phase}'"
+    expect: "Running"
+  - name: bridge-running
+    check: "test -f /tmp/nvsx-bridge.pid && kill -0 $(cat /tmp/nvsx-bridge.pid) 2>/dev/null && echo yes || echo no"
+    expect: "yes"
+
+stages:
+  - id: preflight
+    title: "Pre-flight"
+    timeout: 15s
+
+  - id: baseline
+    title: "Training is running"
+    watch:
+      - kind: pod
+        namespace: default
+        selector: "pytorch-job-name=fault-migrate-test"
+        expect: "phase=Running"
+      - kind: training-log
+        pod: fault-migrate-test-master-0
+        namespace: default
+        pattern: "step \\d+"
+    timeout: 20s
+    dwell: 5s
+
+  - id: inject
+    title: "Inject InfoROM fault"
+    action:
+      script: scripts/simulate-nvsentinel-fault.sh
+    expect:
+      - "Simulating NVSentinel GPU Fault Detection"
+    timeout: 30s
+    dwell: 2s
+
+  - id: detect
+    title: "NVSentinel detects"
+    watch:
+      - kind: node-condition
+        type: GpuInforomWatch
+        status: "True"
+    timeout: 30s
+
+  - id: quarantine
+    title: "Bridge cordons node"
+    watch:
+      - kind: node
+        field: spec.unschedulable
+        expect: "true"
+    timeout: 30s
+
+  - id: drain
+    title: "Pods evicted"
+    watch:
+      - kind: pod-event
+        namespace: default
+        reason: "Evicted"
+    timeout: 30s
+
+  - id: remediate
+    title: "TorchPass migrates"
+    watch:
+      - kind: pod-event
+        namespace: default
+        reason: "TorchPassMigrationStarted"
+    timeout: 60s
+    dwell: 4s
+
+  - id: recover
+    title: "Training resumes on new node"
+    watch:
+      - kind: training-log
+        pod: fault-migrate-test-master-0
+        namespace: default
+        pattern: "step (\\d+)"
+    timeout: 60s
+    dwell: 6s
+
+  - id: postmortem
+    title: "Collect artifacts"
+    action:
+      script: scripts/collect-metrics.sh
+      args: ["./nvsx-artifacts-training"]
+    timeout: 60s
+
+narration:
+  preflight:   "Bridge up, NVSentinel healthy, DDP job running."
+  baseline:    "2-rank DDP training — synthetic data, NCCL over NVLink."
+  inject:      "DCGM injects InfoROM corruption on the master's GPU."
+  detect:      "NVSentinel condition flipped: GpuInforomWatch=True."
+  quarantine:  "Bridge cordons the node (cascade-safe)."
+  drain:       "Pods evicted from the cordoned node."
+  remediate:   "TorchPass wormhole opens — state transfers to a healthy node."
+  recover:     "Training resumes mid-step. No gradient lost."
+  postmortem:  "Artifacts at {{artifactDir}}."

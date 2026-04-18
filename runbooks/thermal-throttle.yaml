@@ -1,0 +1,62 @@
+apiVersion: nvsx/v1
+kind: Runbook
+metadata:
+  name: thermal-throttle
+  nickname: sleepy-panda
+  title: "Thermal throttling detection (stub)"
+  summary: "GpuThermalWatch flips → PreferNoSchedule taint → drain at end of shift. Gentle runbook pattern."
+  tags: [infra, thermal, stub, beta]
+  estimatedDuration: 60s
+
+prerequisites:
+  - name: nvsentinel-control-plane
+    check: "kubectl get pods -n nvsentinel -l app.kubernetes.io/name=fault-quarantine -o jsonpath='{.items[*].status.phase}'"
+    expect: "Running"
+
+stages:
+  - id: preflight
+    title: "Pre-flight"
+    timeout: 15s
+
+  - id: baseline
+    title: "Baseline thermal readings"
+    timeout: 10s
+    dwell: 3s
+
+  - id: inject
+    title: "Simulate thermal violation"
+    # TODO: add shims/simulate-thermal.sh (DCGM field for thermal)
+    timeout: 10s
+
+  - id: detect
+    title: "GpuThermalWatch flips"
+    watch:
+      - kind: node-condition
+        type: GpuThermalWatch
+        status: "True"
+    timeout: 30s
+
+  - id: quarantine
+    title: "PreferNoSchedule taint"
+    watch:
+      - kind: taint
+        key: "nvidia.com/gpu-error"
+    timeout: 15s
+
+  - id: recover
+    title: "Cool-off + uncordon"
+    timeout: 30s
+    dwell: 4s
+
+  - id: postmortem
+    title: "Collect artifacts"
+    timeout: 30s
+
+narration:
+  preflight:   "Pre-flight for thermal stub."
+  baseline:    "GPUs running normal temperatures."
+  inject:      "Simulating thermal violation..."
+  detect:      "NVSentinel: GpuThermalWatch=True."
+  quarantine:  "Taint applied — existing work finishes, no new pods land."
+  recover:     "Cooled off; node uncordoned."
+  postmortem:  "Thermal timeline captured."
