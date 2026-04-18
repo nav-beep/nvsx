@@ -1,6 +1,15 @@
-"""Typer CLI dispatcher. Subcommands call into runner/render/doctor/bridge."""
+"""Typer CLI dispatcher.
+
+Three operator modes:
+  1. setup       — first-run wizard (interactive install/check)
+  2. run / shell — execute runbooks manually (REPL or single-shot)
+  3. serve       — webhook/poll daemon for auto-triggered runbooks
+
+Plus utility commands: list, show, doctor, init, convert, record.
+"""
 from __future__ import annotations
 
+import sys
 from pathlib import Path  # noqa: F401  (used by subcommands)
 from typing import Optional
 
@@ -12,29 +21,32 @@ from .schema import Runbook, Watch
 
 app = typer.Typer(
     name="nvsx",
-    help="NVSentinel eXtensions — cinematic runbooks for GPU cluster fault remediation.",
-    no_args_is_help=True,
+    help="NVSentinel operator control plane — setup, runbooks, webhook daemon.",
     add_completion=False,
     rich_markup_mode="rich",
+    no_args_is_help=False,
 )
 
 console = Console()
 err_console = Console(stderr=True)
 
 
-def find_playground_root() -> Path:
-    """Walk up from this file until a dir with both runbooks/ and scripts/ is found."""
+# ──────────────────────────────────────────────────────────────
+# Path resolution
+
+def find_project_root() -> Path:
+    """Walk up from this file until a dir with runbooks/ is found."""
     here = Path(__file__).resolve().parent
     for parent in [here, *here.parents]:
-        if (parent / "runbooks").is_dir() and (parent / "scripts").is_dir():
+        if (parent / "runbooks").is_dir():
             return parent
     raise FileNotFoundError(
-        "Could not locate playground root (expected sibling dirs: runbooks/, scripts/)"
+        "Could not locate project root (expected a sibling runbooks/ directory)"
     )
 
 
 def find_runbooks_dir() -> Path:
-    return find_playground_root() / "runbooks"
+    return find_project_root() / "runbooks"
 
 
 def load_runbook(name: str) -> tuple[Runbook, Path]:
@@ -62,6 +74,20 @@ def _watch_summary(w: Watch) -> str:
             parts.append(f"{attr}={v}")
     return ", ".join(parts) if parts else "-"
 
+
+# ──────────────────────────────────────────────────────────────
+# Default action: `nvsx` with no args → REPL shell
+
+@app.callback(invoke_without_command=True)
+def _default(ctx: typer.Context) -> None:
+    if ctx.invoked_subcommand is not None:
+        return
+    from .repl import run_shell
+    run_shell(console=console, project_root=find_project_root())
+
+
+# ──────────────────────────────────────────────────────────────
+# Utility commands
 
 @app.command("list")
 def list_runbooks() -> None:
@@ -131,27 +157,37 @@ def doctor(
 ) -> None:
     """Check cluster + NVSentinel readiness."""
     from .doctor import run_doctor
-    ok = run_doctor(console, playground=find_playground_root(), open_uis=open_uis)
+    ok = run_doctor(console, playground=find_project_root(), open_uis=open_uis)
     raise typer.Exit(0 if ok else 1)
 
+
+# ──────────────────────────────────────────────────────────────
+# Runbook execution
 
 @app.command("run")
 def run(
     name: str = typer.Argument(..., help="Runbook name (see `nvsx list`)"),
     dry_run: bool = typer.Option(False, "--dry-run", help="Print plan, don't execute."),
     target_node: Optional[str] = typer.Option(None, "--target-node", help="Target GPU node."),
+    plain: bool = typer.Option(False, "--plain", help="Force plain output (default: auto — cinematic on TTY, plain otherwise)."),
     no_dwell: bool = typer.Option(False, "--no-dwell", help="Skip dwell pauses."),
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Verbose watcher output."),
 ) -> None:
-    """Execute a runbook in plain (CI) mode — JSONL stdout, plain stderr."""
+    """Execute a runbook. Cinematic on a TTY, plain output otherwise."""
     from .runner import Runner
-    from .render import PlainRenderer
+    from .render import CinematicRenderer, PlainRenderer
 
     rb, _path = load_runbook(name)
-    renderer = PlainRenderer(console=console, verbose=verbose)
+
+    use_cinematic = sys.stdout.isatty() and not plain
+    if use_cinematic:
+        renderer = CinematicRenderer()
+    else:
+        renderer = PlainRenderer(console=console, verbose=verbose)
+
     runner = Runner(
         runbook=rb,
-        playground=find_playground_root(),
+        playground=find_project_root(),
         renderer=renderer,
         target_node=target_node,
         no_dwell=no_dwell,
@@ -163,47 +199,12 @@ def run(
     raise typer.Exit(0 if ok else 1)
 
 
-@app.command("demo")
-def demo(
-    name: str = typer.Argument(..., help="Runbook name (see `nvsx list`)"),
-    target_node: Optional[str] = typer.Option(None, "--target-node"),
-    no_dwell: bool = typer.Option(False, "--no-dwell"),
-    record: bool = typer.Option(False, "--record", help="Wrap in asciinema."),
-) -> None:
-    """Execute a runbook with cinematic rendering."""
-    if record:
-        from .recorder import record_demo
-        record_demo(name, target_node=target_node, no_dwell=no_dwell)
-        return
-
-    from .runner import Runner
-    from .render import CinematicRenderer
-
-    rb, _path = load_runbook(name)
-    renderer = CinematicRenderer()
-    runner = Runner(
-        runbook=rb,
-        playground=find_playground_root(),
-        renderer=renderer,
-        target_node=target_node,
-        no_dwell=no_dwell,
-    )
-    ok = runner.execute()
-    raise typer.Exit(0 if ok else 1)
-
-
-@app.command("bridge")
-def bridge(
-    action: str = typer.Argument("status", help="start | stop | status"),
-) -> None:
-    """Manage the NVSentinel→TorchPass bridge as a background service."""
-    from .bridge import bridge_action
-    bridge_action(action, playground=find_playground_root(), console=console)
-
+# ──────────────────────────────────────────────────────────────
+# Scaffolding + conversion
 
 @app.command("init")
 def init(
-    name: str = typer.Argument(..., help="Runbook name / slug (e.g. 'xid-79-recover')"),
+    name: str = typer.Argument(..., help="Runbook slug (e.g. 'xid-79-recover')"),
     title: Optional[str] = typer.Option(None, "--title", help="Human title"),
     summary: Optional[str] = typer.Option(None, "--summary", help="One-line summary"),
 ) -> None:
@@ -211,7 +212,7 @@ def init(
     from .scaffolder import init_runbook
     init_runbook(
         name=name,
-        playground=find_playground_root(),
+        playground=find_project_root(),
         console=console,
         title=title,
         summary=summary,
@@ -221,41 +222,77 @@ def init(
 @app.command("convert")
 def convert(
     source: str = typer.Argument(..., help="Path to source runbook (markdown / text)"),
-    name: Optional[str] = typer.Option(None, "--name", help="Output runbook slug (defaults to source filename)"),
+    name: Optional[str] = typer.Option(None, "--name", help="Output slug (defaults to source filename)"),
     dry_run: bool = typer.Option(False, "--dry-run", help="Print YAML instead of writing"),
 ) -> None:
-    """Convert an existing (markdown / text) runbook to nvsx YAML via Claude.
-
-    Requires ANTHROPIC_API_KEY. Falls back to a rule-based converter if unset.
-    """
+    """Convert an existing markdown runbook to nvsx YAML via Claude. Requires ANTHROPIC_API_KEY."""
     from .converter import convert_runbook
     convert_runbook(
         source_path=Path(source),
         output_name=name,
-        playground=find_playground_root(),
+        playground=find_project_root(),
         console=console,
         dry_run=dry_run,
     )
 
 
-@app.command("selftest")
-def selftest(
-    name: str = typer.Argument("gpu-off-bus-recover", help="Runbook to simulate"),
+# ──────────────────────────────────────────────────────────────
+# Mode commands: setup + serve + shell
+
+@app.command("setup")
+def setup() -> None:
+    """First-run setup wizard: check cluster, suggest runbooks, bootstrap config."""
+    from .setup import run_setup
+    run_setup(console=console, project_root=find_project_root())
+
+
+@app.command("serve")
+def serve(
+    mode: str = typer.Option("webhook", "--mode", "-m", help="webhook | poll"),
+    host: str = typer.Option("127.0.0.1", "--host"),
+    port: int = typer.Option(8080, "--port"),
+    poll_interval: int = typer.Option(10, "--poll-interval", help="Seconds between MongoDB polls (mode=poll)."),
 ) -> None:
-    """Drive the cinematic renderer through a mock run (no cluster required)."""
-    from .selftest import run_selftest
-    _rb, path = load_runbook(name)
-    run_selftest(path)
+    """Run as a daemon — auto-trigger runbooks on incident events.
+
+    Modes:
+      webhook  POST /webhook { runbook, target_node? } → runs the runbook
+      poll     Watches NVSentinel MongoDB HealthEvents → matches condition → runs mapped runbook
+    """
+    from .server import serve_webhook, serve_poll
+
+    if mode == "webhook":
+        serve_webhook(
+            host=host, port=port,
+            project_root=find_project_root(),
+            console=console,
+        )
+    elif mode == "poll":
+        serve_poll(
+            poll_interval=poll_interval,
+            project_root=find_project_root(),
+            console=console,
+        )
+    else:
+        err_console.print(f"[red]Unknown --mode:[/red] {mode!r}. Use: webhook | poll")
+        raise typer.Exit(2)
+
+
+@app.command("shell")
+def shell() -> None:
+    """Interactive operator REPL. Same as running `nvsx` with no arguments."""
+    from .repl import run_shell
+    run_shell(console=console, project_root=find_project_root())
 
 
 @app.command("record")
 def record(
     name: str = typer.Argument(..., help="Runbook name"),
-    out: str = typer.Option("./nvsx-demo.cast", "--out", help="Output .cast path."),
+    out: str = typer.Option("./nvsx-recording.cast", "--out"),
     target_node: Optional[str] = typer.Option(None, "--target-node"),
     no_dwell: bool = typer.Option(False, "--no-dwell"),
 ) -> None:
-    """Record a demo run to asciinema format."""
+    """Record a runbook execution to asciinema format."""
     from .recorder import record_demo
     record_demo(name, out=out, target_node=target_node, no_dwell=no_dwell)
 

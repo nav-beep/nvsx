@@ -210,9 +210,6 @@ If MTTR > 20 min → write a 1-pager post-mortem (template in Notion).
 - In all cases where it happened twice on the same node in <72h, the node
   ended up needing hardware replacement. If you see that pattern, skip straight
   to opening a GCP support ticket — don't waste cycles on a second reboot.
-- If the training job was using TorchPass (rare — only `ml-platform` team
-  uses it), you can skip Steps 4 and 5. The migration is automatic. You still
-  need to do Steps 6-10.
 
 ## TODO (nobody has time to automate this)
 

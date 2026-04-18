@@ -1,193 +1,154 @@
-# nvsx · NVSentinel eXtensions
+# nvsx · NVSentinel operator control plane
 
-**A cinematic runbook runner that sits in front of NVIDIA NVSentinel.**
+**Setup. Runbooks. Auto-trigger. Three modes, one tool.**
 
-Turn your existing GPU cluster runbooks — the 200-line "cordon, drain, page someone, reboot, unsurround" markdown in your Confluence — into declarative YAML + shell hooks that NVSentinel executes for you. Ship one polished runbook and a plugin pattern so your operators can add their own.
+[NVSentinel](https://github.com/NVIDIA/NVSentinel) handles GPU fault detection and the cordon/drain/reboot chain automatically. What it doesn't do is the **operator wrapper** around that chain — paging on-call, updating Jira, posting to Slack, recording MTTR. That's where your existing runbooks live today.
 
-```
-kubectl get events                     nvsx
-     ↓                                   ↓
-    ..logs                            ┌───────────────────────────┐
-┌──────────────────────┐              │  timeline · 9 stages      │
-│ dmesg Xid 79...      │              │  nvsentinel pipeline      │
-│ GpuPcieWatch=True    │   ───▶       │  kernel / dcgm panel      │
-│ fault-quarantine...  │              │  "brave-gazelle cordoned" │
-│ RebootNode CRD ...   │              │  [RebootNode YAML]  ◆     │
-└──────────────────────┘              └───────────────────────────┘
-```
+`nvsx` is the thin control plane that plugs your runbooks into NVSentinel:
+
+| Mode | What it does | Command |
+|---|---|---|
+| **Setup** | Verify cluster, detect NVSentinel, scaffold starter runbooks | `nvsx setup` |
+| **Run** | Execute a runbook manually (TTY → cinematic, pipe → plain) | `nvsx run <runbook>` or `nvsx` (shell) |
+| **Serve** | Auto-trigger runbooks from webhooks or by polling NVSentinel | `nvsx serve --mode webhook \| poll` |
+
+Plus utilities: `list`, `show`, `doctor`, `init`, `convert`, `record`.
 
 ---
 
-## Why does this exist?
+## Install
 
-NVIDIA's [NVSentinel](https://github.com/NVIDIA/NVSentinel) is powerful: 14 health monitors, CEL-based fault quarantine, CRD-driven remediation (RebootNode, GPUReset, TerminateNode), MongoDB event store, Prometheus metrics. But the operator experience today is **bash-heavy** — you cobble `kubectl`, `mongosh`, and log tails together to observe what's happening.
-
-Meanwhile, every infra team has a pile of existing runbooks:
-
-> *"When you see Xid 79 in dmesg, SSH in, confirm, cordon, post in #gpu-alerts, drain, page the job owner, reboot, wait for DCGM diag, uncordon, update Jira, record MTTR."*
-
-Most steps in those runbooks — cordon / drain / reboot / uncordon — are exactly what NVSentinel now does automatically. **What's left is the "operational wrap"**: the Slack pings, the ticket updates, the MTTR recording.
-
-`nvsx` is the thin layer that:
-
-1. **Observes** NVSentinel's detection and remediation pipeline through a declarative YAML runbook.
-2. **Fires** your existing shell scripts at the right stage — `preflight`, `on-remediate`, `on-recover` — so your Slack/PagerDuty/Jira bash drops in unchanged.
-3. **Shows** what's happening in a cinematic terminal flight-deck you can record for social posts, internal adoption decks, or live drills.
-
-It is **not** a replacement for NVSentinel. Every cordon, taint, CRD, and reboot is still NVSentinel's decision — `nvsx` just watches and narrates.
-
----
-
-## Who is this for?
-
-- **GPU cluster operators** adopting NVSentinel who have existing runbooks they don't want to throw away.
-- **Infra teams** who want a consistent "runbook drill" format across failure modes.
-- **Anyone writing a social post / talk / demo** about GPU fault handling who needs a terminal visualization that doesn't look generic.
-
-If you don't run NVSentinel yet: install it first ([NVIDIA's guide](https://github.com/NVIDIA/NVSentinel/blob/main/docs/install.md)), then come back.
-
----
-
-## Quickstart
-
-Clone and run — no pip, no venv ceremony. The `./nvsx` launcher creates a local `.venv/` on first run.
+### Clone and run (recommended for operators)
 
 ```bash
-git clone https://github.com/clockwork-io/nvsx
+git clone https://github.com/nav-beep/nvsx
 cd nvsx
-./nvsx --help
-./nvsx list                          # see the 3 bundled runbooks
-./nvsx show gpu-off-bus-recover      # inspect the flagship runbook
-./nvsx selftest                      # cinematic preview — no cluster needed
-./nvsx doctor                        # cluster + NVSentinel readiness check
+./nvsx --help       # first run auto-creates a local .venv/
 ```
 
-For a 3-minute guided walkthrough (read the runbook → inspect stack → run it):
-
-```bash
-./demo/tour.sh
-```
-
-### Running the full demo against a real cluster
-
-```bash
-# 1. Deploy the demo-safe shims (fake janitor + baseline workload)
-kubectl apply -f shims/demo-janitor-deployment.yaml
-kubectl apply -f shims/sentinel-workload.yaml
-
-# 2. Verify everything is ready
-./nvsx doctor
-
-# 3. Run the flagship runbook
-./nvsx demo gpu-off-bus-recover
-
-# Record for socials
-./nvsx record gpu-off-bus-recover --out demo.cast
-asciinema play demo.cast
-```
-
-### Installing with pip
-
-If you prefer `pip install`:
+### Via pip
 
 ```bash
 pip install nvsx
 nvsx --help
 ```
 
-The runbooks / shims / scripts are bundled in the wheel; find them at `$(python -c 'import nvsx, pathlib; print(pathlib.Path(nvsx.__file__).parent)')`.
+With the `convert` extra (LLM-powered runbook conversion via Claude):
+
+```bash
+pip install 'nvsx[convert]'
+```
 
 ---
 
-## What it looks like
+## Quickstart
 
-### The cinematic flight-deck (`nvsx demo`)
-
+```bash
+./nvsx setup        # one-time wizard: check cluster, scaffold starter runbooks
+./nvsx doctor       # verify readiness
+./nvsx list         # see installed runbooks
+./nvsx              # drop into the operator shell
 ```
-╭─────────────────────────────────────────────────────────────────────────╮
-│  nvsx  ·  #rogue-moose  ·  GPU fell off bus → self-heal                 │
-│  target: brave-gazelle  (gke-nav-gpu-cluster-t4-pool-8ksx)              │
-╰─────────────────────────────────────────────────────────────────────────╯
-
-  TIMELINE                             ELAPSED     STATUS
-  ● preflight ........................  00:03      PASS
-  ● baseline  ........................  00:07      PASS
-  ● inject    ........................  00:09      PASS
-  ● detect    ........................  00:12      PASS
-  ● quarantine ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓░░░░░░░  00:15      WATCHING
-  ○ drain                               –          PENDING
-  ○ remediate                           –          PENDING
-  ○ recover                             –          PENDING
-
-╭─ NVSentinel pipeline ───────────────────────────────────────────────────╮
-│   node       brave-gazelle  (gke-nav-gpu-cluster-t4-pool-8ksx)          │
-│   condition  GpuPcieWatch=True  (2.1s ago)                              │
-│   cordon     ✓ node unschedulable                                       │
-│   taint      nvidia.com/gpu-error=fatal:NoSchedule                      │
-│   mongodb    HealthEvents +1   recommendedAction=RESTART_VM             │
-╰─────────────────────────────────────────────────────────────────────────╯
-
-╭─ Kernel / DCGM ─────────────────────────────────────────────────────────╮
-│ [13:42:07] NVRM: Xid (PCI:0000:00:04): 79, GPU has fallen off the bus   │
-│ [13:42:07] DCGM: XID_ERRORS field 230 value 79 injected on GPU 0        │
-│ [13:42:08] gpu-health-monitor: fault posted to platform-connector       │
-╰─────────────────────────────────────────────────────────────────────────╯
-
-  NVSentinel sees it. GpuPcieWatch flipped in 2.1s.
-```
-
-The "wow" beat at stage 7 (`remediate`): the `RebootNode` CRD appears inline as real YAML.
 
 ---
 
-## How it works
+## The three modes
 
-### Architecture
+### 1. `nvsx setup` — first-run wizard
 
-```
-                        ┌────────────────────────────┐
-                        │  YOU                       │
-                        │  ./nvsx demo <runbook>     │
-                        └─────────────┬──────────────┘
-                                      │
-                   ┌──────────────────▼──────────────────┐
-                   │  nvsx/runner.py                     │
-                   │  — stage loop                       │
-                   │  — subprocess action execution      │
-                   │  — env var plumbing to hooks        │
-                   └──────┬────────────────────┬─────────┘
-                          │                    │
-                 ┌────────▼────────┐   ┌───────▼────────┐
-                 │  watcher.py     │   │  render.py     │
-                 │  — kubectl      │   │  — rich.Live   │
-                 │  — mongosh      │   │  — panels      │
-                 └────────┬────────┘   └────────────────┘
-                          │
-       ┌──────────────────▼─────────────────┐
-       │  YOUR CLUSTER (NVSentinel runs here)│
-       │                                    │
-       │  gpu-health-monitor ─► MongoDB     │
-       │  syslog-health-monitor             │
-       │  fault-quarantine ─► cordons       │
-       │  node-drainer ─► evictions         │
-       │  fault-remediation ─► RebootNode   │
-       │  demo-janitor (shims/)             │
-       └────────────────────────────────────┘
+Run once when you install nvsx against a new cluster. Walks through:
+
+1. kubectl context check
+2. NVSentinel install verification (fault-quarantine, gpu-health-monitor, mongodb)
+3. GPU node discovery
+4. Scaffold starter runbooks for common faults (XID 79, ECC, NVLink, thermal, driver hang, InfoROM)
+
+Nothing is written or applied without explicit confirmation.
+
+### 2. `nvsx run` — manual execution
+
+```bash
+# Shell (default when you just type `nvsx`)
+nvsx
+
+nvsx> list
+nvsx> use gpu-off-bus
+nvsx (gpu-off-bus)> run
+nvsx (gpu-off-bus)> status
+nvsx (gpu-off-bus)> quit
+
+# Direct CLI
+nvsx run gpu-off-bus
+nvsx run gpu-off-bus --target-node gke-t4-pool-abc
+nvsx run gpu-off-bus --dry-run
+nvsx run gpu-off-bus --plain          # force plain output
 ```
 
-**Key invariant:** `nvsx` never writes to the cluster except through the runbook's declared `action.script`. Cordoning, taints, and CRDs are NVSentinel's job.
+Rendering auto-adapts: **cinematic flight-deck on a TTY**, **plain JSONL stdout when piped** (CI-friendly). Same engine either way.
 
-### A runbook is a YAML file
+### 3. `nvsx serve` — auto-trigger daemon
+
+Two modes, selected by `--mode`:
+
+#### webhook (default) — HTTP endpoint
+
+Any incident system POSTs a JSON payload; nvsx fires the matching runbook.
+
+```bash
+nvsx serve --mode webhook --host 0.0.0.0 --port 8080
+```
+
+```bash
+curl -X POST http://localhost:8080/webhook \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "runbook": "gpu-off-bus",
+    "target_node": "gke-ml-pool-t4-abc1",
+    "source": "pagerduty"
+  }'
+# → {"status":"fired","runbook":"gpu-off-bus"}
+```
+
+Wire PagerDuty, Opsgenie, AlertManager, or a custom script to POST to this endpoint.
+
+#### poll — watches NVSentinel's MongoDB
+
+```bash
+nvsx serve --mode poll --poll-interval 10
+```
+
+Queries the `HealthEvents` collection every N seconds for new **fatal** events, matches them to runbooks (by tag or by `detect`-stage condition type), and fires the runbook on a background thread.
+
+Both modes run indefinitely until `Ctrl-C`.
+
+---
+
+## Utility commands
+
+| Command | Purpose |
+|---|---|
+| `nvsx list` | Table of installed runbooks (name, nickname, title, tags) |
+| `nvsx show <runbook>` | Pretty-print a runbook's stages, watch clauses, hooks |
+| `nvsx doctor` | Cluster + NVSentinel readiness check |
+| `nvsx init <slug>` | Scaffold a new runbook: YAML + hook directory + 3 hook stubs |
+| `nvsx convert <file.md>` | Claude-powered conversion of a Markdown runbook → nvsx YAML + hooks |
+| `nvsx record <runbook>` | Wrap execution in asciinema for recordable demos |
+
+---
+
+## What is a runbook?
+
+A YAML file in `runbooks/` that describes which NVSentinel events to **observe** and what **operator hooks** to fire at each stage.
 
 ```yaml
 apiVersion: nvsx/v1
 kind: Runbook
 metadata:
-  name: gpu-off-bus-recover
+  name: gpu-off-bus
   nickname: rogue-moose
   title: "GPU fell off bus → self-heal"
   tags: [infra, nvsentinel, xid, remediation]
-  estimatedDuration: 75s
+  estimatedDuration: 90s
 
 prerequisites:
   - name: nvsentinel-control-plane
@@ -195,116 +156,145 @@ prerequisites:
     expect: "Running"
 
 stages:
-  - id: inject
-    action:
-      script: shims/simulate-gpu-off-bus.sh
-      args: ["$NVSX_TARGET_NODE"]
+  - id: preflight
+    hook: hooks/gpu-off-bus/preflight.sh
+
   - id: detect
     watch:
       - kind: node-condition
         type: GpuPcieWatch
         status: "True"
-    timeout: 30s
+
   - id: remediate
     watch:
       - kind: crd
         group: janitor.dgxc.nvidia.com
         resource: rebootnodes
-    hook: hooks/gpu-off-bus-recover/on-remediate.sh
-    dwell: 5s
-  # ... 6 more stages
+    hook: hooks/gpu-off-bus/on-remediate.sh
+
+  - id: recover
+    watch:
+      - kind: node-condition
+        type: GpuPcieWatch
+        status: "False"
+    hook: hooks/gpu-off-bus/on-recover.sh
+
+  # preflight · detect · quarantine · drain · remediate · recover · postmortem
+  # are the canonical stages. Use all of them; some may be no-ops in your case.
 ```
 
-Nine canonical stages — `preflight`, `baseline`, `inject`, `detect`, `quarantine`, `drain`, `remediate`, `recover`, `postmortem`. Every runbook uses these IDs, even if some are no-ops. Consistency is the framework.
+Canonical stages — **every runbook uses these IDs** for cross-runbook consistency:
+
+| Stage | Purpose |
+|---|---|
+| `preflight` | Validate prerequisites; fire "incident acknowledged" hook |
+| `detect` | Wait for an NVSentinel condition / event |
+| `quarantine` | Observe cordon + taint |
+| `drain` | Observe pod eviction |
+| `remediate` | Observe NVSentinel's remediation CRD creation |
+| `recover` | Observe return to healthy state |
+| `postmortem` | Collect artifacts (always runs, even on failure) |
+
+Plus two optional stages for drill/test runbooks:
+
+| Stage | Purpose |
+|---|---|
+| `baseline` | Pre-fault observation (useful for drills; skipped in production) |
+| `inject` | Fault-injection action (drill only — never in production runbooks) |
 
 Full schema: [runbooks/README.md](runbooks/README.md).
 
-### Hook scripts hold YOUR operational bash
+---
+
+## Hook scripts hold YOUR operational bash
+
+Every runbook can fire hook scripts at stage boundaries:
 
 ```bash
 #!/usr/bin/env bash
-# runbooks/hooks/gpu-off-bus-recover/on-remediate.sh
+# runbooks/hooks/gpu-off-bus/on-remediate.sh
 # Fires when NVSentinel creates the RebootNode CRD.
+set -euo pipefail
 
 curl -s -X POST "$SLACK_WEBHOOK_URL" \
   -H 'Content-type: application/json' \
   -d "{\"text\":\":warning: GPU fault on ${NVSX_TARGET_NODE}\"}"
 
-# Open a ticket, page oncall, emit a metric — whatever your team does.
+# Open a Jira ticket, page oncall, emit a metric — whatever your team does.
 ```
 
-Env vars available to hooks: `NVSX_STAGE`, `NVSX_RUNBOOK`, `NVSX_TARGET_NODE`, `NVSX_ELAPSED_MS`, `NVSX_PLAYGROUND`, `NVSX_REPORT_FILE`.
+Env vars available to hooks:
 
----
-
-## Commands
-
-| Command | What it does |
+| Var | Description |
 |---|---|
-| `nvsx list` | List installed runbooks |
-| `nvsx show <runbook>` | Pretty-print a runbook's stages + hooks |
-| `nvsx doctor` | Check cluster + NVSentinel readiness |
-| `nvsx run <runbook>` | Execute a runbook in CI mode — plain stderr, JSONL stdout |
-| `nvsx run <runbook> --dry-run` | Print the plan, don't execute |
-| `nvsx demo <runbook>` | Cinematic flight-deck rendering |
-| `nvsx selftest` | Run the cinematic flight-deck against mock data (no cluster) |
-| `nvsx init <name>` | Scaffold a new runbook (YAML + hook dir + 3 stubs) |
-| `nvsx convert <file.md>` | **LLM-powered:** take an existing markdown runbook → nvsx YAML + 3 hooks via Claude |
-| `nvsx bridge start\|stop\|status` | Manage the NVSentinel→TorchPass bridge as a background service |
-| `nvsx record <runbook> --out <path>` | Record a demo run to asciinema format |
-
-`run` and `demo` share the same engine — same watchers, same lifecycle, only the renderer differs (plain vs. rich). This is deliberate: a runbook is portable between CI drills and live recordings.
+| `NVSX_STAGE` | Stage id (`preflight`, `detect`, ...) |
+| `NVSX_RUNBOOK` | Runbook name |
+| `NVSX_TARGET_NODE` | The node the runbook is acting on (auto-detected or passed via `--target-node`) |
+| `NVSX_ELAPSED_MS` | Milliseconds since stage began |
+| `NVSX_PROJECT_ROOT` | Absolute path to the nvsx project root |
 
 ---
 
-## Converting an existing runbook (LLM-powered)
+## Converting a legacy runbook
 
-If you have a Confluence page or Markdown doc with your current fault-response process:
+If you have a Markdown / Confluence runbook that covers manual cordon/drain/reboot + Slack/PagerDuty/Jira steps:
 
 ```bash
 export ANTHROPIC_API_KEY=sk-ant-...
-./nvsx convert path/to/your-runbook.md
+nvsx convert path/to/your-runbook.md
 ```
 
-Claude Opus 4.7 splits the original into two buckets:
+Claude Opus 4.7 splits it into two buckets:
 
-- **"Core" remediation** (cordon / drain / reboot) → DELETED from your runbook. Now observed as `watch:` clauses.
-- **"Operational" wrapping** (Slack / PagerDuty / Jira / MTTR) → PRESERVED verbatim in hook scripts.
+- **Core remediation** (kubectl cordon/drain/reboot) → *deleted*. NVSentinel owns these now. They become passive `watch:` clauses.
+- **Operational wrapping** (Slack / PagerDuty / Jira / MTTR) → *preserved verbatim in hook scripts*.
 
-Output: a new `runbooks/<slug>.yaml` + three populated hook scripts ready to commit. Validates against the nvsx schema before writing.
+Output: a new `runbooks/<slug>.yaml` + three populated hook scripts, validated against the nvsx schema before writing.
 
-Try it:
-
-```bash
-./nvsx convert examples/legacy-xid79-runbook.md
-```
-
-(No API key? The conversion is optional. `examples/legacy-xid79-runbook.md` is included so you can see what "before" looks like, and the flagship runbook `gpu-off-bus-recover.yaml` shows "after".)
+Sample input: [examples/sample-runbook.md](examples/sample-runbook.md).
 
 ---
 
-## Adding your own runbook
+## Architecture
 
-```bash
-./nvsx init my-xid-recovery
-# edits to runbooks/my-xid-recovery.yaml
-# edits to runbooks/hooks/my-xid-recovery/{preflight,on-remediate,on-recover}.sh
-./nvsx show my-xid-recovery       # validate it parses
-./nvsx demo my-xid-recovery       # cinematic dry-run
+```
+                        ┌────────────────────────────┐
+                        │  YOU (operator)            │
+                        │  nvsx / nvsx run / …       │
+                        └─────────────┬──────────────┘
+                                      │
+                ┌─────────────────────▼──────────────────────┐
+                │  nvsx core                                 │
+                │  ─ runner.py   stage loop + hook lifecycle │
+                │  ─ watcher.py  kubectl/mongo pollers       │
+                │  ─ render.py   Cinematic / Plain output    │
+                │  ─ schema.py   YAML validation             │
+                └─────────────────────┬──────────────────────┘
+                                      │
+                      ┌───────────────┴────────────────┐
+                      │                                │
+           ┌──────────▼──────────┐       ┌────────────▼────────────┐
+           │  nvsx serve         │       │  nvsx run / shell       │
+           │  webhook/poll daemon│       │  manual execution       │
+           └──────────┬──────────┘       └────────────┬────────────┘
+                      │                                │
+       ┌──────────────▼────────────────────────────────▼────────────┐
+       │  YOUR CLUSTER (NVSentinel runs here)                       │
+       │                                                            │
+       │  gpu-health-monitor ─► MongoDB HealthEvents                │
+       │  syslog-health-monitor                                     │
+       │  fault-quarantine    ─► cordons nodes                      │
+       │  node-drainer        ─► evicts pods                        │
+       │  fault-remediation   ─► RebootNode / GPUReset CRDs         │
+       │  janitor             ─► executes CRDs                      │
+       └────────────────────────────────────────────────────────────┘
 ```
 
-See [runbooks/README.md](runbooks/README.md) for the schema, watch kinds, and hook env vars.
-
-Rules that keep a runbook sane:
-
-- **Use the canonical stage IDs.** A thermal runbook still has `preflight / baseline / inject / detect / quarantine / drain / remediate / recover / postmortem` — only the watch content changes.
-- **Put logic in hooks, not YAML.** YAML is declarative observations; logic is shell.
-- **Never cordon / remediate from nvsx.** NVSentinel owns that. Hooks are for observation, alerting, and bookkeeping.
-- **Keep `postmortem`.** It runs even if earlier stages fail — it's your artifact safety net.
+**Key invariant:** `nvsx` never writes to the cluster except through a runbook's declared `action.script`. Cordoning, taints, and CRDs are NVSentinel's job — `nvsx` observes and orchestrates.
 
 ---
 
-## Layout
+## Repo layout
 
 ```
 nvsx/
@@ -314,35 +304,36 @@ nvsx/
 │   ├── cli.py                  # Typer dispatcher
 │   ├── runner.py               # stage loop + hook lifecycle
 │   ├── watcher.py              # kubectl/mongo pollers (8 kinds)
-│   ├── render.py               # PlainRenderer + CinematicRenderer
+│   ├── render.py               # Cinematic + Plain renderers
 │   ├── schema.py               # pydantic Runbook model
-│   ├── doctor.py               # preflight checks
-│   ├── bridge.py               # NVSentinel→TorchPass bridge manager
-│   ├── recorder.py             # asciinema wrap
-│   ├── scaffolder.py           # nvsx init
-│   ├── converter.py            # nvsx convert (Claude)
-│   ├── selftest.py             # mock flight-deck
-│   ├── aliases.py              # deterministic node aliases (brave-gazelle)
+│   ├── doctor.py               # readiness checks
+│   ├── repl.py                 # `nvsx` / `nvsx shell`
+│   ├── server.py               # `nvsx serve` (webhook + poll)
+│   ├── setup.py                # `nvsx setup`
+│   ├── scaffolder.py           # `nvsx init`
+│   ├── converter.py            # `nvsx convert` (Claude)
+│   ├── recorder.py             # `nvsx record`
+│   ├── aliases.py              # deterministic node aliases
 │   └── presets.py              # colors / icons
-├── runbooks/                   # YAML runbooks + hook scripts
-│   ├── gpu-off-bus-recover.yaml    # flagship · "rogue-moose"
-│   ├── training-migrate.yaml       # stub · "wandering-wolf"
-│   ├── thermal-throttle.yaml       # stub · "sleepy-panda"
-│   ├── README.md
-│   └── hooks/<runbook>/
-├── shims/                      # demo-mode k8s resources
-│   ├── demo-janitor-deployment.yaml
-│   ├── sentinel-workload.yaml
-│   └── ...
-├── scripts/                    # standalone helpers the runbooks call
-│   ├── nvsentinel-torchpass-bridge.sh
-│   ├── collect-metrics.sh
-│   └── ...
-├── examples/                   # input examples for `nvsx convert`
-│   └── legacy-xid79-runbook.md
-└── demo/                       # recorded-walkthrough scripts
-    └── tour.sh
+├── runbooks/
+│   ├── gpu-off-bus.yaml            # flagship · #rogue-moose
+│   ├── thermal-throttle.yaml       # stub · #sleepy-panda
+│   ├── README.md                   # schema + how-to-write
+│   └── hooks/<runbook>/            # per-runbook hook scripts
+├── scripts/                    # helpers runbooks call
+│   ├── collect-metrics.sh          # postmortem artifact collector
+│   └── port-forward-all.sh         # grafana/prometheus UI helper
+└── examples/
+    └── sample-runbook.md       # input for `nvsx convert`
 ```
+
+---
+
+## Node aliases
+
+`gke-nav-gpu-cluster-t4-pool-8ksx` is no one's idea of a memorable name. `nvsx` deterministically maps every node to an adjective-animal alias — `brave-gazelle`, `rogue-moose`, `sleepy-panda` — using SHA-256 + a 4096-combination word list. Same node always gets the same alias; shown next to the raw name everywhere.
+
+"NVSentinel just cordoned `brave-gazelle`" is a lot easier to track over Zoom than reading out an 11-character GKE suffix.
 
 ---
 
@@ -350,17 +341,9 @@ nvsx/
 
 - Python 3.11+
 - `kubectl` on `$PATH`, with a context pointing at a cluster running NVSentinel
-- Optional: `uv` (the launcher prefers it over `pip` if present)
+- Optional: `uv` (the launcher prefers it over `pip` if present, for faster setup)
 - Optional: `asciinema` (for `nvsx record`)
 - Optional: `ANTHROPIC_API_KEY` (for `nvsx convert`)
-
----
-
-## Node aliases
-
-`gke-nav-gpu-cluster-t4-pool-8ksx` is no one's idea of a memorable name. `nvsx` deterministically maps every node name to an adjective-animal alias — `brave-gazelle`, `rogue-moose`, `sleepy-panda` — using SHA-256 + a curated word list (4096 combinations). The same node always gets the same alias; it's shown next to the raw name everywhere.
-
-"NVSentinel just cordoned `brave-gazelle`" is a lot more memorable over a Zoom than reading out an 11-character GKE suffix.
 
 ---
 
@@ -370,23 +353,22 @@ nvsx/
 2. **Replacing NVSentinel components** — no fault detection, no cordon logic, no remediation. NVSentinel always wins.
 3. **Web dashboard** — Grafana exists. The TUI is the UI.
 4. **Multi-cluster / remote execution** — assumes current `kubectl` context, single cluster.
-5. **Helm-style YAML templating** — only fixed narration vars (`{{elapsed}}`, `{{targetNode}}`, etc.). Operators who need config pass env to hook scripts.
+5. **Helm-style YAML templating** — only fixed narration vars (`{{elapsed}}`, `{{targetNode}}`, etc.). For config, pass env vars to hook scripts.
 
 ---
 
 ## Contributing
 
-Issues and PRs welcome — especially new runbooks (`nvsx init`, fill in the stages, submit). Keep runbooks under ~150 lines; put logic in hooks, not YAML.
-
-Dev setup:
+Issues and PRs welcome — especially new runbooks. The easiest way to contribute one:
 
 ```bash
-git clone https://github.com/clockwork-io/nvsx
-cd nvsx
-./nvsx --help                        # first run creates .venv
-# for editable install with dev deps:
-# pip install -e .[convert]
+nvsx init my-fault-scenario
+# fill in the YAML + hooks
+git add runbooks/my-fault-scenario.yaml runbooks/hooks/my-fault-scenario/
+git commit -m "runbook: my-fault-scenario"
 ```
+
+Keep runbooks under ~150 lines. Put logic in hooks, not YAML.
 
 ---
 
@@ -394,7 +376,7 @@ cd nvsx
 
 **MIT.** See [LICENSE](LICENSE).
 
-MIT is a permissive open-source license: anyone can use, modify, distribute, or sell `nvsx` — including in commercial or closed-source products — as long as they include the copyright notice and license text. No warranty, no restrictions beyond attribution. It's the standard for "use this freely, don't sue us if it breaks."
+MIT is a permissive open-source license: anyone can use, modify, distribute, or sell `nvsx` — including in commercial or closed-source products — as long as they include the copyright notice and license text. No warranty, no restrictions beyond attribution. It's the standard "use this freely, don't sue us if it breaks" license.
 
 ---
 
@@ -402,6 +384,6 @@ MIT is a permissive open-source license: anyone can use, modify, distribute, or 
 
 - [NVIDIA NVSentinel](https://github.com/NVIDIA/NVSentinel) — the fault detection + remediation system nvsx sits on top of
 - [NVIDIA DCGM](https://github.com/NVIDIA/DCGM) — the GPU telemetry backbone NVSentinel reads
-- [asciinema](https://asciinema.org) — terminal session recording for social posts
+- [asciinema](https://asciinema.org) — terminal session recording for demos
 
 Built on [rich](https://github.com/Textualize/rich), [typer](https://github.com/tiangolo/typer), [pydantic](https://github.com/pydantic/pydantic), [anthropic-sdk-python](https://github.com/anthropics/anthropic-sdk-python).

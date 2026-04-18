@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ==============================================================================
-# on-recover hook for gpu-off-bus-recover
+# on-recover hook for gpu-off-bus
 # ==============================================================================
 # Fires after the node fully recovers (condition cleared, uncordoned, workload
 # rescheduled). In production, this is where you'd:

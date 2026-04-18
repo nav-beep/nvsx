@@ -29,19 +29,11 @@ _CHECKS = [
       "-l", "app.kubernetes.io/name=mongodb",
       "-o", "jsonpath={.items[0].status.phase}"],
      "Running"),
-    ("T4 GPU node available",
+    ("GPU node available",
      ["kubectl", "get", "nodes",
-      "-l", "cloud.google.com/gke-accelerator=nvidia-tesla-t4",
-      "-o", "jsonpath={.items[0].metadata.name}"],
+      "-o", "jsonpath={range .items[?(@.status.capacity.nvidia\\.com/gpu)]}"
+            "{.metadata.name}\\n{end}"],
      None),
-    ("demo-janitor shim installed",
-     ["kubectl", "get", "deploy", "-n", "nvsx-shims", "demo-janitor",
-      "-o", "jsonpath={.status.readyReplicas}"],
-     ">=1"),
-    ("sentinel workload deployed",
-     ["kubectl", "get", "deploy", "-n", "default", "nvsx-sentinel-workload",
-      "-o", "jsonpath={.status.readyReplicas}"],
-     ">=1"),
 ]
 
 
@@ -65,7 +57,6 @@ def _evaluate(output: str, expected: str | None) -> tuple[bool, str]:
         except ValueError:
             return False, f"got {output!r}"
         return val >= threshold, f"{val} >= {threshold}"
-    # Exact / contains match
     return expected in output, f"{output[:50]}"
 
 
@@ -76,53 +67,27 @@ def run_doctor(console: Console, playground: Path, open_uis: bool = False) -> bo
     table.add_column("Detail", style="dim")
 
     all_ok = True
-    warnings = 0
     for name, cmd, expect in _CHECKS:
         rc, out = _run(cmd)
         if rc != 0:
-            # Hard fail for core checks, warn for optional ones
-            is_warn = name in (
-                "demo-janitor shim installed",
-                "sentinel workload deployed",
-            )
-            if is_warn:
-                table.add_row(name, f"[{C_YELLOW}]⚠ MISSING[/{C_YELLOW}]", "run setup to install")
-                warnings += 1
-            else:
-                table.add_row(name, f"[{C_RED}]✗ FAIL[/{C_RED}]", f"{out[:60]}")
-                all_ok = False
+            table.add_row(name, f"[{C_RED}]✗ FAIL[/{C_RED}]", f"{out[:60]}")
+            all_ok = False
             continue
         ok, detail = _evaluate(out, expect)
         if ok:
             table.add_row(name, f"[{C_GREEN}]✓ OK[/{C_GREEN}]", detail)
         else:
-            is_warn = name in (
-                "demo-janitor shim installed",
-                "sentinel workload deployed",
-            )
-            if is_warn:
-                table.add_row(name, f"[{C_YELLOW}]⚠ MISSING[/{C_YELLOW}]", detail)
-                warnings += 1
-            else:
-                table.add_row(name, f"[{C_RED}]✗ FAIL[/{C_RED}]", detail)
-                all_ok = False
+            table.add_row(name, f"[{C_RED}]✗ FAIL[/{C_RED}]", detail)
+            all_ok = False
 
     console.print(table)
 
-    if warnings > 0:
-        console.print(
-            f"\n[yellow]{warnings} optional components missing.[/yellow] "
-            "To deploy the demo shims:"
-        )
-        console.print(f"  [dim]kubectl apply -f {playground}/shims/demo-janitor-deployment.yaml[/dim]")
-        console.print(f"  [dim]kubectl apply -f {playground}/shims/sentinel-workload.yaml[/dim]")
-
     if all_ok:
         console.print(f"\n[{C_GREEN}]Cluster ready.[/{C_GREEN}] "
-                      f"Run: [bold]./nvsx demo gpu-off-bus-recover[/bold]\n")
+                      f"Try: [bold]./nvsx list[/bold]  or  [bold]./nvsx[/bold] (shell)\n")
     else:
-        console.print(f"\n[{C_RED}]Cluster not ready.[/{C_RED}] "
-                      "See failures above.\n")
+        console.print(f"\n[{C_RED}]Cluster not ready.[/{C_RED}] See failures above.")
+        console.print(f"[dim]If NVSentinel isn't installed yet, run `./nvsx setup`.[/dim]\n")
 
     if open_uis:
         pf = playground / "scripts" / "port-forward-all.sh"
@@ -130,6 +95,6 @@ def run_doctor(console: Console, playground: Path, open_uis: bool = False) -> bo
             console.print(f"[dim]Opening port-forwards: {pf}[/dim]")
             subprocess.Popen([str(pf)])
         else:
-            console.print(f"[yellow]port-forward-all.sh not found at {pf}[/yellow]")
+            console.print(f"[{C_YELLOW}]port-forward-all.sh not found[/{C_YELLOW}] — skipping")
 
     return all_ok

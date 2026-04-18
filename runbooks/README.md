@@ -6,7 +6,7 @@ A runbook is a single YAML file in this directory. The engine discovers it autom
 
 1. Copy an existing runbook as a starting point:
    ```
-   cp gpu-off-bus-recover.yaml my-runbook.yaml
+   cp gpu-off-bus.yaml my-runbook.yaml
    ```
 2. Edit `metadata.name`, `metadata.title`, `metadata.summary`.
 3. Adjust `prerequisites`, `stages`, and `narration`.
