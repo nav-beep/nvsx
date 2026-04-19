@@ -12,7 +12,7 @@
 | **Run** | Execute a runbook manually (TTY → cinematic, pipe → plain) | `nvsx run <runbook>` or `nvsx` (shell) |
 | **Serve** | Auto-trigger runbooks from webhooks or by polling NVSentinel | `nvsx serve --mode webhook \| poll` |
 
-Plus utilities: `list`, `show`, `doctor`, `init`, `convert`, `record`.
+Plus utilities: `list`, `show`, `doctor`, `init`, `convert`.
 
 <video src="https://github.com/nav-beep/nvsx/releases/download/v0.2.0/nvsx-demo.mov" controls muted loop playsinline width="720">
   Your browser doesn't render inline video — <a href="https://github.com/nav-beep/nvsx/releases/download/v0.2.0/nvsx-demo.mov">download the demo</a>.
@@ -136,7 +136,6 @@ Both modes run indefinitely until `Ctrl-C`.
 | `nvsx doctor` | Cluster + NVSentinel readiness check |
 | `nvsx init <slug>` | Scaffold a new runbook: YAML + hook directory + 3 hook stubs |
 | `nvsx convert <file.md>` | Claude-powered conversion of a Markdown runbook → nvsx YAML + hooks |
-| `nvsx record <runbook>` | Wrap execution in asciinema for recordable demos |
 
 ---
 
@@ -316,7 +315,6 @@ nvsx/
 │   ├── setup.py                # `nvsx setup`
 │   ├── scaffolder.py           # `nvsx init`
 │   ├── converter.py            # `nvsx convert` (Claude)
-│   ├── recorder.py             # `nvsx record`
 │   ├── aliases.py              # deterministic node aliases
 │   └── presets.py              # colors / icons
 ├── runbooks/
@@ -346,7 +344,6 @@ nvsx/
 - Python 3.11+
 - `kubectl` on `$PATH`, with a context pointing at a cluster running NVSentinel
 - Optional: `uv` (the launcher prefers it over `pip` if present, for faster setup)
-- Optional: `asciinema` (for `nvsx record`)
 - Optional: `ANTHROPIC_API_KEY` (for `nvsx convert`)
 
 ---
@@ -388,6 +385,5 @@ MIT is a permissive open-source license: anyone can use, modify, distribute, or 
 
 - [NVIDIA NVSentinel](https://github.com/NVIDIA/NVSentinel) — the fault detection + remediation system nvsx sits on top of
 - [NVIDIA DCGM](https://github.com/NVIDIA/DCGM) — the GPU telemetry backbone NVSentinel reads
-- [asciinema](https://asciinema.org) — terminal session recording for demos
 
 Built on [rich](https://github.com/Textualize/rich), [typer](https://github.com/tiangolo/typer), [pydantic](https://github.com/pydantic/pydantic), [anthropic-sdk-python](https://github.com/anthropics/anthropic-sdk-python).

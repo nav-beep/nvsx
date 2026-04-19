@@ -5,7 +5,7 @@ Three operator modes:
   2. run / shell — execute runbooks manually (REPL or single-shot)
   3. serve       — webhook/poll daemon for auto-triggered runbooks
 
-Plus utility commands: list, show, doctor, init, convert, record.
+Plus utility commands: list, show, doctor, init, convert.
 """
 from __future__ import annotations
 
@@ -283,18 +283,6 @@ def shell() -> None:
     """Interactive operator REPL. Same as running `nvsx` with no arguments."""
     from .repl import run_shell
     run_shell(console=console, project_root=find_project_root())
-
-
-@app.command("record")
-def record(
-    name: str = typer.Argument(..., help="Runbook name"),
-    out: str = typer.Option("./nvsx-recording.cast", "--out"),
-    target_node: Optional[str] = typer.Option(None, "--target-node"),
-    no_dwell: bool = typer.Option(False, "--no-dwell"),
-) -> None:
-    """Record a runbook execution to asciinema format."""
-    from .recorder import record_demo
-    record_demo(name, out=out, target_node=target_node, no_dwell=no_dwell)
 
 
 def main() -> None:

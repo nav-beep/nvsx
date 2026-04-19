@@ -124,7 +124,6 @@ Simple string substitution — no templating engine:
 
 `./nvsx demo <rb> --no-dwell` — skip the pacing pauses (useful for iteration).
 
-`./nvsx record <rb> --out demo.cast` — wrap `demo` in `asciinema rec`.
 
 ## What NOT to do
 
