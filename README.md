@@ -14,6 +14,10 @@
 
 Plus utilities: `list`, `show`, `doctor`, `init`, `convert`, `record`.
 
+<video src="https://github.com/nav-beep/nvsx/releases/download/v0.2.0/nvsx-demo.mov" controls muted loop playsinline width="720">
+  Your browser doesn't render inline video — <a href="https://github.com/nav-beep/nvsx/releases/download/v0.2.0/nvsx-demo.mov">download the demo</a>.
+</video>
+
 ---
 
 ## Install
